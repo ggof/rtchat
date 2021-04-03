@@ -12,15 +12,15 @@ import (
 type WSHandler = func(*websocket.Conn)
 
 func main() {
-
 	hub := hub.NewHub()
 
 	r := fiber.New()
-	r.Static("/static", "frontend/public")
 
 	r.Use("/ws", upgrade)
 
 	r.Get("/ws/:id", websocket.New(handleWS(hub)))
+
+	go hub.Run()
 
 	r.Listen(":5000")
 }
@@ -37,7 +37,7 @@ func handleWS(h hub.Hub) WSHandler {
 	return func(c *websocket.Conn) {
 		id := c.Params("id")
 
-		h.Add(id, c)
+		err := <-h.Add(id, c)
 
 		for {
 			mess, err := ReadString(c)
@@ -45,6 +45,7 @@ func handleWS(h hub.Hub) WSHandler {
 			if err != nil {
 				log.Println(err.Error())
 				c.Close()
+				h.Del(id, c)
 				return
 			}
 
