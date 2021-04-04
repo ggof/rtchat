@@ -1,15 +1,17 @@
 package hub
 
-import "github.com/gofiber/websocket/v2"
+import (
+	"github.com/gofiber/websocket/v2"
+)
 
 type entry struct {
 	name string
 	conn *websocket.Conn
 }
 
-func (e *entry) Send(msg *Message) {
+func (e *entry) Send(value string) {
 	if e.conn != nil {
-		e.conn.WriteJSON(msg)
+		e.conn.WriteMessage(websocket.TextMessage, []byte(value))
 	}
 }
 

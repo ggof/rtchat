@@ -1,30 +1,19 @@
 package hub
 
 import (
+	"time"
+
 	"github.com/gofiber/websocket/v2"
 )
 
-type Message struct {
-	Ts     int64    `json:"ts"`
-	Id     string   `json:"id"`
-	Msg    string   `json:"msg"`
-	SentBy string   `json:"sent_by"`
-	RecvBy []string `json:"recv_by"`
-}
-
-type Invite struct {
-	By string
-	ID string
-}
-
 // Hub interface representing every possible action on the hub.
 type Hub interface {
-	Join(id string, conn *websocket.Conn) chan error
-	Remove(id string, conn *websocket.Conn) chan error
-	Rename(id, name string) chan error
-	Send(id string, msg Message) chan error
-	Receive(id string, msg Message) chan error
-	Login(id string) chan error
+	Join(by string, id string, conn *websocket.Conn) chan error
+	Remove(by string, id string, conn *websocket.Conn) chan error
+	Rename(by string, id string, name string) chan error
+	Send(id string, msg string) chan error
+	Read(id string, ts int64) chan error
+	Login(id string, conn *websocket.Conn) chan error
 	Logout(id string) chan error
 	Run()
 }
@@ -48,9 +37,9 @@ func NewHub(name, owner string) Hub {
 	}
 }
 
-// Add adds id as a user in this hub. if added by an admin, conn will be nil
+// Add adds req.ID as a user in this hub.
 // Users that aren't admins can only join public hubs
-func (h *hub) Join(id string, conn *websocket.Conn) chan error {
+func (h *hub) Join(by string, id string, conn *websocket.Conn) chan error {
 	err := make(chan error)
 
 	h.mailbox <- func() {
@@ -59,7 +48,7 @@ func (h *hub) Join(id string, conn *websocket.Conn) chan error {
 			return
 		}
 
-		if conn != nil && !h.public {
+		if by != h.owner && !h.public {
 			returnError(err, ErrPrivateHub)
 			return
 		}
@@ -72,7 +61,8 @@ func (h *hub) Join(id string, conn *websocket.Conn) chan error {
 }
 
 // Remove deletes id from this hub, closing it's connection if it is still opened.
-func (h *hub) Remove(id string, conn *websocket.Conn) chan error {
+// If conn is not null, then it must match
+func (h *hub) Remove(by string, id string, conn *websocket.Conn) chan error {
 	err := make(chan error)
 
 	h.mailbox <- func() {
@@ -80,6 +70,11 @@ func (h *hub) Remove(id string, conn *websocket.Conn) chan error {
 
 		if !ok {
 			returnError(err, ErrNotInHub)
+			return
+		}
+
+		if by != h.owner && conn != user.conn {
+			returnError(err, ErrNotAdmin)
 			return
 		}
 
@@ -92,19 +87,19 @@ func (h *hub) Remove(id string, conn *websocket.Conn) chan error {
 }
 
 // Rename changes the nickname of id to name for this hub
-func (h *hub) Rename(id, name string) chan error {
+func (h *hub) Rename(by string, id string, name string) chan error {
+	err := make(chan error)
+	defer close(err)
+	return err
+}
+
+func (h *hub) Send(id, msg string) chan error {
 	err := make(chan error)
 
 	h.mailbox <- func() {
-		user, ok := h.users[id]
-
-		if !ok {
-			returnError(err, ErrNotInHub)
-			return
+		for _, user := range h.users {
+			user.Send(encodeSend(time.Now().Unix(), id, msg))
 		}
-
-		user.name = name
-		h.users[id] = user
 
 		close(err)
 	}
@@ -112,36 +107,50 @@ func (h *hub) Rename(id, name string) chan error {
 	return err
 }
 
-func (h *hub) Send(id string, msg Message) chan error {
+func (h *hub) Read(id string, ts int64) chan error {
 	err := make(chan error)
 
 	h.mailbox <- func() {
-		for userId, user := range h.users {
-			if id == userId {
-				continue
-			}
-
-			user.Send(&msg)
+		for _, user := range h.users {
+			user.Send(encodeRead(id, ts))
 		}
+
+		close(err)
 	}
 
 	return err
 }
 
-func (h *hub) Receive(id string, msg Message) chan error {
+func (h *hub) Login(id string, conn *websocket.Conn) chan error {
 	err := make(chan error)
+	h.mailbox <- func() {
+		user, ok := h.users[id]
+		if !ok {
+			returnError(err, ErrNotInHub)
+			return
+		}
 
-	return err
-}
-
-func (h *hub) Login(id string) chan error {
-	err := make(chan error)
-
+		user.conn = conn
+		h.users[id] = user
+		close(err)
+	}
 	return err
 }
 
 func (h *hub) Logout(id string) chan error {
 	err := make(chan error)
+	h.mailbox <- func() {
+		user, ok := h.users[id]
+		
+		if !ok {
+			returnError(err, ErrNotInHub)
+			return
+		}
+
+		user.conn = nil
+		h.users[id] = user
+		close(err)
+	}
 
 	return err
 }
@@ -151,3 +160,4 @@ func (h *hub) Run() {
 		mess()
 	}
 }
+

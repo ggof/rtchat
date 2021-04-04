@@ -12,7 +12,7 @@ import (
 type WSHandler = func(*websocket.Conn)
 
 func main() {
-	hub := hub.NewHub()
+	hub := hub.NewHub("test", "gofg2301")
 
 	r := fiber.New()
 
@@ -37,33 +37,43 @@ func handleWS(h hub.Hub) WSHandler {
 	return func(c *websocket.Conn) {
 		id := c.Params("id")
 
-		err := <-h.Add(id, c)
+		if err := <-h.Login(id, c); err != nil {
+			log.Println(err.Error())
+			c.Close()
+		}
+
+		log.Printf("New connection from id %s\n", id)
 
 		for {
-			mess, err := ReadString(c)
+			mess, err := decode(c)
 
 			if err != nil {
 				log.Println(err.Error())
-				c.Close()
-				h.Del(id, c)
+				h.Logout(id)
 				return
 			}
 
-			h.Snd(id, mess)
+			mess.Handle(h)
 		}
 	}
 }
 
-func ReadString(c *websocket.Conn) (string, error) {
-			t, messBytes, err := c.ReadMessage()
+func decode(c *websocket.Conn) (hub.Message, error) {
+	t, msgBytes, err := c.ReadMessage()
 
-			if err != nil {
-				return "", errors.New("ws: " + err.Error())
-			}
+	if err != nil {
+		return nil, errors.New("ws: " + err.Error())
+	}
 
-			if t != websocket.TextMessage {
-				return "", errors.New("ws: not a text message")
-			}
+	if t != websocket.TextMessage {
+		return nil, errors.New("ws: not a text message")
+	}
 
-			return string(messBytes), nil
+	for _, tryDecode := range hub.DefaultDecoders {
+		if msg := tryDecode(string(msgBytes)); msg != nil {
+			return msg, nil
+		}
+	}
+
+	return nil, errors.New("encodable: no decoders to decode message")
 }
